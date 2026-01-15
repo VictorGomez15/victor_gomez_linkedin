@@ -5,6 +5,8 @@ streamlit run app.py
 """
 
 from pathlib import Path
+import re
+import unicodedata
 
 import pandas as pd
 import plotly.express as px
@@ -48,11 +50,58 @@ def clasificar_seniority(posicion: str) -> str:
     return "Low"
 
 
+def _quitar_acentos(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn")
+
+
+def normalizar_posicion(posicion: str) -> str:
+    """Agrupa variaciones comunes de cargos para el gráfico Top 15."""
+    if not isinstance(posicion, str):
+        return ""
+    texto = posicion.strip().lower()
+    texto = re.sub(r"\s+", " ", texto)
+    texto_sin = _quitar_acentos(texto)
+    texto_clean = re.sub(r"[^a-z0-9\s/,&-]", " ", texto_sin)
+    texto_clean = re.sub(r"\s+", " ", texto_clean).strip()
+
+    # Detección por inclusiones para robustez
+    if "chief executive officer" in texto_clean or re.search(r"\bceo\b", texto_clean):
+        return "CEO"
+    if re.search(r"\brector[ae]?\b", texto_clean):
+        return "Rector"
+    if re.search(r"\bvicerrector[ae]?\s+academic", texto_clean) or re.search(r"\bvice\s+chancellor\b", texto_clean):
+        return "Vicerrector Académico"
+    if (
+        re.search(r"\bgerente\s+general\b", texto_clean)
+        or re.search(r"\bgernte\s+general\b", texto_clean)
+        or re.search(r"\bgeneral\s+manager\b", texto_clean)
+        or re.search(r"\bgerente\b", texto_clean)
+    ):
+        return "Gerente General"
+    if re.search(r"\bdirector[ao]?\b", texto_clean):
+        return "Director"
+    if re.search(r"\bpresident[ea]?\b", texto_clean):
+        return "Presidente"
+    if re.search(r"\bfundador\b", texto_clean) or re.search(r"\bfounder\b", texto_clean):
+        return "Fundador"
+    if (
+        re.search(r"\bprof+esor\b", texto_clean)
+        or re.search(r"\bprofessor\b", texto_clean)
+        or re.search(r"\bdocent[ea]?\b", texto_clean)
+        or re.search(r"\bdocencia\b", texto_clean)
+    ):
+        return "Profesor/Docente"
+    if re.search(r"\bconsultor\b", texto_clean):
+        return "Consultor"
+    return posicion.strip()
+
+
 @st.cache_data(show_spinner=False)
 def cargar_datos(archivo):
     df = pd.read_csv(archivo, skiprows=3)
     df["Connected On"] = pd.to_datetime(df["Connected On"], format="%d %b %Y", errors="coerce")
     df["Position"] = df["Position"].fillna("").str.strip()
+    df["Position_norm"] = df["Position"].apply(normalizar_posicion)
     df["Year"] = df["Connected On"].dt.year
     df["Seniority"] = df["Position"].apply(clasificar_seniority)
     return df
@@ -80,8 +129,8 @@ def crear_grafico_crecimiento(df):
 
 def crear_grafico_posiciones(df):
     top_posiciones = (
-        df[df["Position"] != ""]
-        .groupby("Position")
+        df[df["Position_norm"] != ""]
+        .groupby("Position_norm")
         .size()
         .reset_index(name="Conteo")
         .sort_values("Conteo", ascending=False)
@@ -90,7 +139,7 @@ def crear_grafico_posiciones(df):
     fig = px.bar(
         top_posiciones.sort_values("Conteo"),
         x="Conteo",
-        y="Position",
+        y="Position_norm",
         orientation="h",
         title="Top 15 cargos/posiciones",
         text="Conteo",
